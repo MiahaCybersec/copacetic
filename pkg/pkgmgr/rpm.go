@@ -41,11 +41,12 @@ const (
 type rpmToolPaths map[string]string
 
 type rpmManager struct {
-	config        *buildkit.Config
-	workingFolder string
-	rpmTools      rpmToolPaths
-	isDistroless  bool
-	packageInfo   map[string]string
+	config         *buildkit.Config
+	workingFolder  string
+	rpmTools       rpmToolPaths
+	isDistroless   bool
+	isMissingTools bool
+	packageInfo    map[string]string
 }
 
 type rpmDBType uint
@@ -210,7 +211,7 @@ func (rm *rpmManager) InstallUpdates(ctx context.Context, manifest *unversioned.
 
 	var updatedImageState *llb.State
 	var resultManifestBytes []byte
-	if rm.isDistroless {
+	if rm.isDistroless || rm.isMissingTools {
 		updatedImageState, resultManifestBytes, err = rm.unpackAndMergeUpdates(ctx, updates, toolImageName)
 		if err != nil {
 			return nil, nil, err
@@ -333,19 +334,11 @@ func (rm *rpmManager) probeRPMStatus(ctx context.Context, toolImage string) erro
 			return err
 		}
 
-		var allErrors *multierror.Error
 		if rpmTools["dnf"] == "" && rpmTools["yum"] == "" && rpmTools["microdnf"] == "" {
-			err = errors.New("image contains no RPM package managers needed for patching")
-			log.Error(err)
-			allErrors = multierror.Append(allErrors, err)
+			rm.isMissingTools = true
 		}
 		if rpmTools["rpm"] == "" {
-			err = errors.New("image does not have the rpm tool needed for patch verification")
-			log.Error(err)
-			allErrors = multierror.Append(allErrors, err)
-		}
-		if allErrors != nil {
-			return allErrors.ErrorOrNil()
+			rm.isMissingTools = true
 		}
 
 		rm.rpmTools = rpmTools
@@ -513,6 +506,8 @@ func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates unversi
 	fieldsWritten := mkFolders.Dir(downloadPath).Run(llb.Shlex(writeFieldsCmd)).Root()
 
 	// Update the rpm manifests for Mariner distroless
+	// This is what needs to be modified to support non-distroless as well
+	// Should this logic be split into if statements based on rm.isMissingTools?
 	manifestsPath := filepath.Join(rpmManifestPath, rpmManifestWildcard)
 	manifests := fieldsWritten.File(llb.Copy(rm.config.ImageState, manifestsPath, resultsPath, &llb.CopyInfo{AllowWildcard: true}))
 	const updateManifest2Template = `find . -name '*.manifest2' -exec sh -c '
