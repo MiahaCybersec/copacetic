@@ -211,8 +211,13 @@ func (rm *rpmManager) InstallUpdates(ctx context.Context, manifest *unversioned.
 
 	var updatedImageState *llb.State
 	var resultManifestBytes []byte
-	if rm.isDistroless || rm.isMissingTools {
+	if rm.isDistroless {
 		updatedImageState, resultManifestBytes, err = rm.unpackAndMergeUpdates(ctx, updates, toolImageName)
+		if err != nil {
+			return nil, nil, err
+		}
+	} else if rm.isMissingTools {
+		updatedImageState, resultManifestBytes, err = rm.mountToolsAndInstallUpdates(ctx, updates, toolImageName)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -427,6 +432,57 @@ func (rm *rpmManager) installUpdates(ctx context.Context, updates unversioned.Up
 	return &patchMerge, resultBytes, nil
 }
 
+func (rm *rpmManager) mountToolsAndInstallUpdates(ctx context.Context, updates unversioned.UpdatePackages, toolImage string) (*llb.State, []byte, error) {
+	pkgs := ""
+	toolingBase := llb.Image(toolImage,
+		llb.ResolveModeDefault,
+	)
+
+	toolsInstalled := toolingBase.Run(llb.Shlex(installToolsCmd), llb.WithProxy(utils.GetProxy())).Root()
+
+	// If specific updates, provided, parse into pkg names, else will update all
+	if updates != nil {
+		// Format the requested updates into a space-separated string
+		pkgStrings := []string{}
+		for _, u := range updates {
+			pkgStrings = append(pkgStrings, u.Name)
+		}
+		pkgs = strings.Join(pkgStrings, " ")
+	}
+
+	var installCmd string
+	if pkgs == "" {
+		installCmd = fmt.Sprintf("/mnt/usr/bin/yumdownloder --downloadonly --downloaddir=. --best -y %s", pkgs)
+	} else {
+		installCmd = fmt.Sprintf("/mnt/usr/bin/yumdownloader install -y %s", pkgs)
+	}
+
+	// All tooling is located in /mnt/usr/bin/yumdownloader
+	toolsMounted := rm.config.ImageState.Run(llb.AddMount("/mnt", toolsInstalled), llb.Shlex("ls -lrt /mnt")).Root()
+
+	//
+	installed := toolsMounted.Run(llb.Shlex(installCmd), llb.WithProxy(utils.GetProxy())).Root()
+
+	// Write results.manifest to host for post-patch validation
+	var resultBytes []byte
+	var err error
+	if updates != nil {
+		const rpmResultsTemplate = `sh -c 'rpm -qa --queryformat "%s" %s > "%s"'`
+		outputResultsCmd := fmt.Sprintf(rpmResultsTemplate, resultQueryFormat, pkgs, resultManifest)
+		resultsWritten := installed.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).AddMount(resultsPath, llb.Scratch())
+
+		resultBytes, err = buildkit.ExtractFileFromState(ctx, rm.config.Client, &resultsWritten, resultManifest)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	// Diff the installed updates and merge that into the target image
+	patchDiff := llb.Diff(rm.config.ImageState, installed)
+	patchMerge := llb.Merge([]llb.State{rm.config.ImageState, patchDiff})
+	return &patchMerge, resultBytes, nil
+}
+
 func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates unversioned.UpdatePackages, toolImage string) (*llb.State, []byte, error) {
 	// Spin up a build tooling container to fetch and unpack packages to create patch layer.
 	// Pull family:version -> need to create version to base image map
@@ -506,8 +562,6 @@ func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates unversi
 	fieldsWritten := mkFolders.Dir(downloadPath).Run(llb.Shlex(writeFieldsCmd)).Root()
 
 	// Update the rpm manifests for Mariner distroless
-	// This is what needs to be modified to support non-distroless as well
-	// Should this logic be split into if statements based on rm.isMissingTools?
 	manifestsPath := filepath.Join(rpmManifestPath, rpmManifestWildcard)
 	manifests := fieldsWritten.File(llb.Copy(rm.config.ImageState, manifestsPath, resultsPath, &llb.CopyInfo{AllowWildcard: true}))
 	const updateManifest2Template = `find . -name '*.manifest2' -exec sh -c '
