@@ -452,22 +452,28 @@ func (rm *rpmManager) mountToolsAndInstallUpdates(ctx context.Context, updates u
 
 	var installCmd string
 	if pkgs == "" {
-		installCmd = fmt.Sprintf("/mnt/usr/bin/yumdownloder --downloadonly --downloaddir=. --best -y %s", pkgs)
+		installCmd = fmt.Sprintf(`/usr/bin/bash -c 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/mnt/lib ; /mnt/usr/bin/rpm --downloadonly --downloaddir=. --best --skip-broken -y %s'`, pkgs)
 	} else {
-		installCmd = fmt.Sprintf("/mnt/usr/bin/yumdownloader install -y %s", pkgs)
+		installCmd = fmt.Sprintf(`/usr/bin/bash -c 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/mnt/lib:/mnt/usr/lib ; /mnt/usr/bin/bash -c /mnt/usr/bin/rpm install --skip-broken -y %s'`, pkgs)
 	}
 
-	// All tooling is located in /mnt/usr/bin/yumdownloader
-	toolsMounted := rm.config.ImageState.Run(llb.AddMount("/mnt", toolsInstalled), llb.Shlex("ls -lrt /mnt")).Root()
+	// All tooling is located in /mnt/usr/bin/
+	// Currently, installCmd fails because of the following error
+	// #11 0.203 /mnt/usr/bin/bash: symbol lookup error: /mnt/lib/libc.so.6: undefined symbol: _dl_audit_symbind_alt, version GLIBC_PRIVATE
+	// If the above error is fixed, we should be able to run update commands on toolless images
+	installed := rm.config.ImageState.Run(llb.AddMount("/mnt", toolsInstalled), llb.Shlex(installCmd)).Root()
 
-	//
-	installed := toolsMounted.Run(llb.Shlex(installCmd), llb.WithProxy(utils.GetProxy())).Root()
+	// Calling toolsMounted here gives us absolutely nothing at /mnt
+	// Leave this line commented in just in case it's needed in the future
+	// installed := toolsMounted.Run(llb.Shlex("/usr/bin/bash -c 'ls -lrt /mnt'"), llb.WithProxy(utils.GetProxy())).Root()
 
 	// Write results.manifest to host for post-patch validation
 	var resultBytes []byte
 	var err error
 	if updates != nil {
-		const rpmResultsTemplate = `sh -c 'rpm -qa --queryformat "%s" %s > "%s"'`
+		// Since the tooling image is only mounted for one LLB state, this code may need to be modified in order to work properly
+		// Leave it be until the above error is fixed
+		const rpmResultsTemplate = `/usr/bin/bash -c '/mnt/usr/bin/rpm -qa --queryformat "%s" %s > "%s"'`
 		outputResultsCmd := fmt.Sprintf(rpmResultsTemplate, resultQueryFormat, pkgs, resultManifest)
 		resultsWritten := installed.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).AddMount(resultsPath, llb.Scratch())
 
