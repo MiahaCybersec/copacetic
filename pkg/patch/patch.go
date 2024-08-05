@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/project-copacetic/copacetic/pkg/languagemgr"
+
 	"github.com/containerd/platforms"
 	"github.com/docker/buildx/build"
 	"github.com/docker/cli/cli/config"
@@ -175,7 +177,8 @@ func patchWithContext(ctx context.Context, ch chan error, image, reportFile, pat
 			}
 
 			// Create package manager helper
-			var manager pkgmgr.PackageManager
+			var pkgManager pkgmgr.PackageManager
+			var languageManager languagemgr.LanguageManager
 			if reportFile == "" {
 				// determine OS family
 				fileBytes, err := buildkit.ExtractFileFromState(ctx, c, &config.ImageState, "/etc/os-release")
@@ -197,14 +200,24 @@ func patchWithContext(ctx context.Context, ch chan error, image, reportFile, pat
 				}
 
 				// get package manager based on os family type
-				manager, err = pkgmgr.GetPackageManager(osType, osVersion, config, workingFolder)
+				pkgManager, err = pkgmgr.GetPackageManager(osType, osVersion, config, workingFolder)
 				if err != nil {
 					ch <- err
 					return nil, err
 				}
 			} else {
 				// get package manager based on os family type
-				manager, err = pkgmgr.GetPackageManager(updates.Metadata.OS.Type, updates.Metadata.OS.Version, config, workingFolder)
+				pkgManager, err = pkgmgr.GetPackageManager(updates.Metadata.OS.Type, updates.Metadata.OS.Version, config, workingFolder)
+				if err != nil {
+					ch <- err
+					return nil, err
+				}
+
+				// We need a way to tell what languages are in the environment
+				// Unlike an OS, there is no one central file to track this information
+				// languageType, err := getLanguageType(ctx)
+
+				languageManager, err = languagemgr.GetLanguageManager(updates.Metadata.Language.Type, config, workingFolder)
 				if err != nil {
 					ch <- err
 					return nil, err
@@ -213,7 +226,7 @@ func patchWithContext(ctx context.Context, ch chan error, image, reportFile, pat
 
 			// Export the patched image state to Docker
 			// TODO: Add support for other output modes as buildctl does.
-			patchedImageState, errPkgs, err := manager.InstallUpdates(ctx, updates, ignoreError)
+			patchedImageState, errPkgs, err := pkgManager.InstallUpdates(ctx, updates, ignoreError)
 			if err != nil {
 				ch <- err
 				return nil, err
@@ -250,20 +263,23 @@ func patchWithContext(ctx context.Context, ch chan error, image, reportFile, pat
 							Type:    updates.Metadata.OS.Type,
 							Version: updates.Metadata.OS.Version,
 						},
+						Language: unversioned.Language{
+							Type: updates.Metadata.Language.Type,
+						},
 						Config: unversioned.Config{
 							Arch: updates.Metadata.Config.Arch,
 						},
 					},
-					Updates: []unversioned.UpdatePackage{},
+					OSUpdates: []unversioned.UpdatePackage{},
 				}
-				for _, update := range updates.Updates {
+				for _, update := range updates.OSUpdates {
 					if !slices.Contains(errPkgs, update.Name) {
-						validatedManifest.Updates = append(validatedManifest.Updates, update)
+						validatedManifest.OSUpdates = append(validatedManifest.OSUpdates, update)
 					}
 				}
 				// vex document must contain at least one statement
-				if output != "" && len(validatedManifest.Updates) > 0 {
-					if err := vex.TryOutputVexDocument(validatedManifest, manager, patchedImageName, format, output); err != nil {
+				if output != "" && len(validatedManifest.OSUpdates) > 0 {
+					if err := vex.TryOutputVexDocument(validatedManifest, pkgManager, languageManager, patchedImageName, format, output); err != nil {
 						ch <- err
 						return nil, err
 					}

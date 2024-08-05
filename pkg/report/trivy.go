@@ -34,17 +34,23 @@ func (t *TrivyParser) Parse(file string) (*unversioned.UpdateManifest, error) {
 	}
 
 	// Precondition check
-	result := trivyTypes.Result{}
+	osResult := trivyTypes.Result{}
+	pkgResult := trivyTypes.Result{}
 	for i := range report.Results {
 		r := &report.Results[i]
 		if r.Class == trivyTypes.ClassOSPkg {
-			if result.Class != "" {
+			if osResult.Class != "" {
 				return nil, errors.New("unexpected multiple results for os-pkgs")
 			}
-			result = *r
+			osResult = *r
+		} else if r.Class == trivyTypes.ClassLangPkg {
+			if pkgResult.Class != "" {
+				return nil, errors.New("unexpected multiple results for lang-pkgs")
+			}
+			pkgResult = *r
 		}
 	}
-	if result.Class == "" {
+	if osResult.Class == "" {
 		return nil, errors.New("no scanning results for os-pkgs found")
 	}
 
@@ -60,10 +66,22 @@ func (t *TrivyParser) Parse(file string) (*unversioned.UpdateManifest, error) {
 		},
 	}
 
-	for i := range result.Vulnerabilities {
-		vuln := &result.Vulnerabilities[i]
+	for i := range osResult.Vulnerabilities {
+		vuln := &osResult.Vulnerabilities[i]
 		if vuln.FixedVersion != "" {
-			updates.Updates = append(updates.Updates, unversioned.UpdatePackage{
+			updates.OSUpdates = append(updates.OSUpdates, unversioned.UpdatePackage{
+				Name:             vuln.PkgName,
+				InstalledVersion: vuln.InstalledVersion,
+				FixedVersion:     vuln.FixedVersion,
+				VulnerabilityID:  vuln.VulnerabilityID,
+			})
+		}
+	}
+
+	for i := range pkgResult.Vulnerabilities {
+		vuln := &pkgResult.Vulnerabilities[i]
+		if vuln.FixedVersion != "" {
+			updates.LanguageUpdates = append(updates.LanguageUpdates, unversioned.UpdatePackage{
 				Name:             vuln.PkgName,
 				InstalledVersion: vuln.InstalledVersion,
 				FixedVersion:     vuln.FixedVersion,

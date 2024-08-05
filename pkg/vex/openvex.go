@@ -54,11 +54,42 @@ func (o *OpenVex) CreateVEXDocument(
 	}
 
 	pkgType := pkgmgr.GetPackageType()
-	for _, u := range updates.Updates {
+	for _, u := range updates.OSUpdates {
 		subComponent := vex.Subcomponent{
 			Component: vex.Component{
 				// syntax is "pkg:<pkgType>/<osType>/<packageName>@<installedVersion>?arch=<arch>"
 				ID: "pkg:" + pkgType + "/" + updates.Metadata.OS.Type + "/" + u.Name + "@" + u.FixedVersion + "?arch=" + updates.Metadata.Config.Arch,
+			},
+		}
+
+		// if vulnerable id already exists, append to existing statement
+		found := false
+		for i := range doc.Statements {
+			if doc.Statements[i].Vulnerability.ID == u.VulnerabilityID {
+				found = true
+				doc.Statements[i].Products[0].Subcomponents = append(doc.Statements[i].Products[0].Subcomponents, subComponent)
+			}
+		}
+		if found {
+			continue
+		}
+
+		// otherwise, create new statement
+		imageProduct.Subcomponents = []vex.Subcomponent{subComponent}
+		doc.Statements = append(doc.Statements, vex.Statement{
+			Vulnerability: vex.Vulnerability{
+				ID: u.VulnerabilityID,
+			},
+			Products: []vex.Product{imageProduct},
+			Status:   "fixed",
+		})
+	}
+
+	for _, u := range updates.LanguageUpdates {
+		subComponent := vex.Subcomponent{
+			Component: vex.Component{
+				// syntax is "pkg:<pkgType>/<osType>/<packageName>@<installedVersion>?arch=<arch>"
+				ID: "pkg:" + pkgType + "/" + updates.Metadata.Language.Type + "/" + u.Name + "@" + u.FixedVersion + "?arch=" + updates.Metadata.Config.Arch,
 			},
 		}
 

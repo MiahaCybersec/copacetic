@@ -200,7 +200,7 @@ func (rm *rpmManager) InstallUpdates(ctx context.Context, manifest *unversioned.
 		}
 
 		rpmComparer = VersionComparer{isValidRPMVersion, isLessThanRPMVersion}
-		updates, err = GetUniqueLatestUpdates(manifest.Updates, rpmComparer, ignoreErrors)
+		updates, err = GetUniqueLatestUpdates(manifest.OSUpdates, rpmComparer, ignoreErrors)
 		if err != nil {
 			return nil, nil, err
 		}
