@@ -213,11 +213,9 @@ func patchWithContext(ctx context.Context, ch chan error, image, reportFile, pat
 					return nil, err
 				}
 
-				// We need a way to tell what languages are in the environment
-				// Unlike an OS, there is no one central file to track this information
-				// languageType, err := getLanguageType(ctx)
-
-				languageManager, err = languagemgr.GetLanguageManager(updates.Metadata.Language.Type, config, workingFolder)
+				if updates.Metadata.Language.Type != "" {
+					languageManager, err = languagemgr.GetLanguageManager(updates.Metadata.Language.Type, config, workingFolder)
+				}
 				if err != nil {
 					ch <- err
 					return nil, err
@@ -230,6 +228,14 @@ func patchWithContext(ctx context.Context, ch chan error, image, reportFile, pat
 			if err != nil {
 				ch <- err
 				return nil, err
+			}
+
+			if updates.Metadata.Language.Type != "" {
+				patchedImageState, errPkgs, err = languageManager.InstallUpdates(ctx, updates, ignoreError)
+				if err != nil {
+					ch <- err
+					return nil, err
+				}
 			}
 
 			platform := platforms.Normalize(platforms.DefaultSpec())

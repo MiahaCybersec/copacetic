@@ -88,6 +88,7 @@ func (t *TrivyParser) Parse(file string) (*unversioned.UpdateManifest, error) {
 				VulnerabilityID:  vuln.VulnerabilityID,
 			})
 		}
+		updates.Metadata.Language.Type = pkgResult.Target
 	}
 
 	return &updates, nil
