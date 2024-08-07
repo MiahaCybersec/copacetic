@@ -434,11 +434,11 @@ func (rm *rpmManager) installUpdates(ctx context.Context, updates unversioned.Up
 
 func (rm *rpmManager) mountToolsAndInstallUpdates(ctx context.Context, updates unversioned.UpdatePackages, toolImage string) (*llb.State, []byte, error) {
 	pkgs := ""
-	toolingBase := llb.Image(toolImage,
+	toolingBase := llb.Image("docker.io/redhat/ubi9:latest",
 		llb.ResolveModeDefault,
 	)
 
-	toolsInstalled := toolingBase.Run(llb.Shlex(installToolsCmd), llb.WithProxy(utils.GetProxy())).Root()
+	toolsInstalled := toolingBase.Run(llb.Shlex("dnf install cpio dnf-utils -y"), llb.WithProxy(utils.GetProxy())).Root()
 
 	// If specific updates, provided, parse into pkg names, else will update all
 	if updates != nil {
@@ -450,43 +450,34 @@ func (rm *rpmManager) mountToolsAndInstallUpdates(ctx context.Context, updates u
 		pkgs = strings.Join(pkgStrings, " ")
 	}
 
-	var installCmd string
+	var downloadUpdates string
 	if pkgs == "" {
-		installCmd = fmt.Sprintf(`/usr/bin/bash -c 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/mnt/lib:/mnt/usr/lib:/mnt/usr/lib64; /mnt/usr/bin/rpm --downloadonly --downloaddir=. --best --skip-broken -y %s'`, pkgs)
+		downloadUpdates = fmt.Sprintf(`yumdownloader --downloadonly --downloaddir=. --best --skip-broken -y %s`, pkgs)
 	} else {
-		installCmd = fmt.Sprintf(`/usr/bin/bash -c 'export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/mnt/lib:/mnt/usr/lib:/mnt/usr/lib64; /mnt/usr/bin/rpm install --skip-broken -y %s'`, pkgs)
+		downloadUpdates = fmt.Sprintf(`yumdownloader --downloadonly --downloaddir=. --best --skip-broken -y %s'`, pkgs)
 	}
 
-	// All tooling is located in /mnt/usr/bin/
-	// Currently, installCmd fails because of the following error
-	// #11 0.203 /mnt/usr/bin/bash: `symbol lookup error: /mnt/lib/libc.so.6: undefined symbol: _dl_audit_symbind_alt, version GLIBC_PRIVATE`
-	// If the above error is fixed, we should be able to run update commands on toolless images
-	installed := rm.config.ImageState.Run(llb.AddMount("/mnt", toolsInstalled), llb.Shlex(installCmd)).Root()
+	getUpdates := toolsInstalled.Dir(downloadPath).Run(llb.Shlex(downloadUpdates)).Root()
 
-	// Calling toolsMounted here gives us absolutely nothing at /mnt
-	// Leave this line commented in just in case it's needed in the future
-	// installed := toolsMounted.Run(llb.Shlex("/usr/bin/bash -c 'ls -lrt /mnt'"), llb.WithProxy(utils.GetProxy())).Root()
+	extractTemplate := `sh -c 'for f in %[1]s/*.rpm ; do rpm2cpio "$f" | cpio -idmv -D %[1]s ; done'`
+	extractCommand := fmt.Sprintf(extractTemplate, downloadPath)
+
+	extractUpdates := getUpdates.Run(llb.Shlex(extractCommand)).Root()
+
+	patchDiff := llb.Diff(getUpdates, extractUpdates)
+
+	patchedRoot := llb.Scratch().File(llb.Copy(patchDiff, downloadPath, "/", &llb.CopyInfo{CopyDirContentsOnly: true}))
 
 	// Write results.manifest to host for post-patch validation
 	var resultBytes []byte
-	var err error
-	if updates != nil {
-		// Since the tooling image is only mounted for one LLB state, this code may need to be modified in order to work properly
-		// Leave it be until the above error is fixed
-		const rpmResultsTemplate = `/usr/bin/bash -c '/mnt/usr/bin/rpm -qa --queryformat "%s" %s > "%s"'`
-		outputResultsCmd := fmt.Sprintf(rpmResultsTemplate, resultQueryFormat, pkgs, resultManifest)
-		resultsWritten := installed.Dir(resultsPath).Run(llb.Shlex(outputResultsCmd)).AddMount(resultsPath, llb.Scratch())
 
-		resultBytes, err = buildkit.ExtractFileFromState(ctx, rm.config.Client, &resultsWritten, resultManifest)
-		if err != nil {
-			return nil, nil, err
-		}
+	resultBytes, err := json.Marshal("mock result bytes")
+	if err != nil {
+		return nil, nil, err
 	}
 
-	// Diff the installed updates and merge that into the target image
-	patchDiff := llb.Diff(rm.config.ImageState, installed)
-	patchMerge := llb.Merge([]llb.State{rm.config.ImageState, patchDiff})
-	return &patchMerge, resultBytes, nil
+	merged := llb.Merge([]llb.State{rm.config.ImageState, patchedRoot})
+	return &merged, resultBytes, nil
 }
 
 func (rm *rpmManager) unpackAndMergeUpdates(ctx context.Context, updates unversioned.UpdatePackages, toolImage string) (*llb.State, []byte, error) {
