@@ -25,7 +25,6 @@ type patchArgs struct {
 	ignoreError   bool
 	format        string
 	output        string
-	outputType    string
 	bkOpts        buildkit.Opts
 }
 
@@ -51,7 +50,6 @@ func NewPatchCmd() *cobra.Command {
 				ua.scanner,
 				ua.format,
 				ua.output,
-				ua.outputType,
 				ua.ignoreError,
 				bkopts)
 		},
@@ -70,7 +68,6 @@ func NewPatchCmd() *cobra.Command {
 	flags.BoolVar(&ua.ignoreError, "ignore-errors", false, "Ignore errors and continue patching")
 	flags.StringVarP(&ua.format, "format", "f", "openvex", "Output format, defaults to 'openvex'")
 	flags.StringVarP(&ua.output, "output", "o", "", "Output file path")
-	flags.StringVarP(&ua.outputType, "output-type", "", "docker", "Specify image output as Docker or OCI, defaults to Docker")
 
 	if err := patchCmd.MarkFlagRequired("image"); err != nil {
 		panic(err)

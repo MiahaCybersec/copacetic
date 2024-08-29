@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/google/go-containerregistry/pkg/crane"
-
 	"github.com/containerd/platforms"
 	"github.com/moby/buildkit/client/llb"
 	"github.com/moby/buildkit/client/llb/sourceresolver"
@@ -64,8 +62,6 @@ func InitializeBuildkitConfig(ctx context.Context, c gwclient.Client, userImage 
 	if err != nil {
 		return nil, err
 	}
-
-	config.Manifest, err = crane.Manifest(baseImage)
 
 	// Only set PatchedImageState if the user supplied a patched image
 	// An image is deemed to be a patched image if it contains one of two metadata values
