@@ -146,11 +146,15 @@ func patchWithContext(ctx context.Context, ch chan error, image, reportFile, pat
 	pipeR, pipeW := io.Pipe()
 	dockerConfig := config.LoadDefaultConfigFile(os.Stderr)
 	attachable := []session.Attachable{authprovider.NewDockerAuthProvider(dockerConfig, nil)}
+	exporterType, err := getExporterType(imageName.String())
+	if err != nil {
+		return err
+	}
 
 	solveOpt := client.SolveOpt{
 		Exports: []client.ExportEntry{
 			{
-				Type: getExporterType(imageName.String()),
+				Type: exporterType,
 				Attrs: map[string]string{
 					"name": patchedImageName,
 				},
@@ -304,21 +308,26 @@ func patchWithContext(ctx context.Context, ch chan error, image, reportFile, pat
 	return eg.Wait()
 }
 
-func getExporterType(image string) string {
+func getExporterType(image string) (string, error) {
 	var manifestUnmarshalled map[string]string
 	var exporterType string
 
-	manifest, _ := crane.Manifest(image)
+	manifest, err := crane.Manifest(image)
+	if err != nil {
+		return "", err
+	}
 	json.Unmarshal(manifest, &manifestUnmarshalled)
 
 	switch {
-	case strings.Contains(manifestUnmarshalled["mediaType"], "oci.image.manifest"):
+	// Ensure we are catching all valid OCI mediaType definitions as defined in
+	// https://github.com/opencontainers/image-spec/blob/main/media-types.md
+	case strings.Contains(manifestUnmarshalled["mediaType"], "application/vnd.oci"):
 		exporterType = client.ExporterOCI
 	default:
 		exporterType = client.ExporterDocker
 	}
 
-	return exporterType
+	return exporterType, nil
 }
 
 func getOSType(ctx context.Context, osreleaseBytes []byte) (string, error) {
